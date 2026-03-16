@@ -34,11 +34,38 @@ This skill uses operations inspired by the [Synodic coordination model](https://
 
 ## Phase 0: Observe
 
-Before collecting anyone's opinion, examine the objective evidence.
+Before collecting anyone's opinion, examine the objective evidence. There are two complementary lenses available — use whichever data exists, ideally both.
 
-**If there's a workspace or output directory from a recent execution:**
+### Lens 1: Session Transcript (the "blood test")
 
-Run the observation script to inspect execution artifacts:
+AI coding tools like Claude Code store complete session transcripts as JSONL files. These contain every tool call, every result, every error — the ground truth of what actually happened, independent of what the agent chose to report.
+
+**Discover available transcripts:**
+
+```bash
+python <skill-base>/scripts/observe_execution.py --list-transcripts
+```
+
+Known transcript locations:
+- Claude Code: `~/.claude/projects/<project-hash>/<session-id>.jsonl`
+- Subagent transcripts: `~/.claude/projects/<project-hash>/<session-id>/subagents/agent-*.jsonl`
+
+**Parse a transcript:**
+
+```bash
+python <skill-base>/scripts/observe_execution.py --transcript <session.jsonl> --skill-name <name> --json
+```
+
+This extracts from the raw runtime log:
+- Every tool call the agent made and in what order
+- Tool errors and failures (exit codes, exceptions, permission denials)
+- Which skills were referenced during execution
+- Token usage and session duration
+- Event type distribution (how much time in tool use vs. thinking vs. user interaction)
+
+### Lens 2: Workspace Artifacts (the "physical exam")
+
+If the execution produced files in a workspace directory, scan them:
 
 ```bash
 python <skill-base>/scripts/observe_execution.py <workspace-dir> --skill-name <name> --json
@@ -46,31 +73,37 @@ python <skill-base>/scripts/observe_execution.py <workspace-dir> --skill-name <n
 
 This produces an objective record of:
 - What files were created and their sizes (empty files = likely silent failure)
-- Error traces found in any output files (grep for tracebacks, exceptions, permission errors)
+- Error traces found in any output files
 - Script logs, stderr captures, exit codes
 - Token usage and timing if available
 
-**If you also have self-reported signals, cross-reference them:**
+### Combining both lenses
+
+When both a transcript and a workspace are available, use both:
 
 ```bash
-python <skill-base>/scripts/observe_execution.py <workspace-dir> --compare-signal <skill-name>
+python <skill-base>/scripts/observe_execution.py <workspace-dir> \
+  --transcript <session.jsonl> --skill-name <name> --json
 ```
 
-This runs the convergence check — comparing what the agent reported vs. what the artifacts show. Discrepancies are the most valuable diagnostic signal:
+### Cross-reference with self-reports (convergence check)
 
-- **Errors in artifacts, no failure reported** → agent didn't recognize its own failure
-- **Failure reported, no errors in artifacts** → agent may be mischaracterizing a correct outcome
+Add `--compare-signal <skill-name>` to any of the above commands to compare the objective observation against what the agent self-reported via signal_log.py. Discrepancies are the most valuable diagnostic signal:
+
+- **Errors in transcript/artifacts, no failure reported** → agent didn't recognize its own failure
+- **Failure reported, no errors found** → agent may be mischaracterizing a correct outcome
 - **Verified fix reported, errors still present** → fix was ineffective
+- **Tools used but not reported** → agent's self-report is incomplete
 - **Empty outputs despite execution signals** → skill ran but produced nothing useful
 
 Save the observation:
 
 ```bash
 python <skill-base>/scripts/signal_log.py record <skill-name> observation \
-  '{"workspace": "...", "errors_found": [...], "discrepancies": [...]}'
+  '{"workspace": "...", "transcript": "...", "errors_found": [...], "discrepancies": [...]}'
 ```
 
-**If no workspace is available**, skip to Phase 1 and note that diagnosis will rely on self-report only (lower confidence).
+**If neither transcript nor workspace is available**, skip to Phase 1 and note that diagnosis will rely on self-report only (lower confidence).
 
 ---
 
