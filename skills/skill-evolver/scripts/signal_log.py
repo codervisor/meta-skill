@@ -9,7 +9,7 @@ Usage:
   python signal_log.py summarize <skill-name>
   python signal_log.py summarize-all
 
-Signal types: failure, fix, health_check, user_feedback, execution
+Signal types: failure, fix, health_check, user_feedback, execution, observation
 """
 
 import sys
@@ -91,6 +91,10 @@ def summarize(skill_name: str) -> dict:
     fixes = [s for s in signals if s["type"] == "fix"]
     verified_fixes = sum(1 for f in fixes if f.get("verified", False))
 
+    observations = [s for s in signals if s["type"] == "observation"]
+    obs_with_errors = sum(1 for o in observations if o.get("errors_found"))
+    obs_with_discrepancies = sum(1 for o in observations if o.get("discrepancies"))
+
     return {
         "skill": skill_name,
         "total_signals": len(signals),
@@ -104,13 +108,22 @@ def summarize(skill_name: str) -> dict:
             "total": len(fixes),
             "verified": verified_fixes,
         },
-        "health": _health_rating(len(failures), recent_failures, verified_fixes, len(fixes)),
-        "recommendation": _recommendation(root_causes, recent_failures),
+        "observations": {
+            "total": len(observations),
+            "with_errors": obs_with_errors,
+            "with_discrepancies": obs_with_discrepancies,
+        },
+        "health": _health_rating(len(failures), recent_failures, verified_fixes,
+                                 len(fixes), obs_with_discrepancies),
+        "recommendation": _recommendation(root_causes, recent_failures, obs_with_discrepancies),
     }
 
 
-def _health_rating(total_failures, recent_failures, verified_fixes, total_fixes):
-    if total_failures == 0:
+def _health_rating(total_failures, recent_failures, verified_fixes, total_fixes,
+                    obs_discrepancies=0):
+    if obs_discrepancies >= 2:
+        return "unreliable-reporting"
+    if total_failures == 0 and obs_discrepancies == 0:
         return "healthy"
     if recent_failures >= 3:
         return "degraded"
@@ -121,15 +134,21 @@ def _health_rating(total_failures, recent_failures, verified_fixes, total_fixes)
     return "fair"
 
 
-def _recommendation(root_causes, recent_failures):
-    if not root_causes:
-        return None
-    top_cause, count = root_causes.most_common(1)[0]
-    if count >= 3:
-        return f"Recurring issue: {top_cause} ({count} times). Consider structural fix."
+def _recommendation(root_causes, recent_failures, obs_discrepancies=0):
+    recs = []
+    if obs_discrepancies >= 2:
+        recs.append(
+            f"Observation discrepancies ({obs_discrepancies}): "
+            "agent self-reports don't match execution artifacts. "
+            "Run observe_execution.py to cross-reference."
+        )
+    if root_causes:
+        top_cause, count = root_causes.most_common(1)[0]
+        if count >= 3:
+            recs.append(f"Recurring issue: {top_cause} ({count} times). Consider structural fix.")
     if recent_failures >= 3:
-        return "Recent spike in failures. Run diagnosis."
-    return None
+        recs.append("Recent spike in failures. Run diagnosis.")
+    return recs if recs else None
 
 
 def summarize_all():
@@ -149,7 +168,7 @@ def main():
 
     rec = sub.add_parser("record")
     rec.add_argument("skill_name")
-    rec.add_argument("signal_type", choices=["failure", "fix", "health_check", "user_feedback", "execution"])
+    rec.add_argument("signal_type", choices=["failure", "fix", "health_check", "user_feedback", "execution", "observation"])
     rec.add_argument("data", help="JSON string")
 
     q = sub.add_parser("query")
